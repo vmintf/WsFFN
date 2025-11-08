@@ -135,20 +135,10 @@ These losses are designed to be fully batched and parallelized, adding minimal p
 **Important**: $d_{\text{ffn}}$ must be divisible by $n_{\text{head}}$; $$z_{\text{dimhead}} = d_{\text{ffn}} / n_{\text{head}}$$.
 
 ### Forward Signature
-
-```python
-Y, aux = wsffn(X, is_training=True)
-```
-
-- `X`: shape `[B, L, d_model]`
-- `Y`: shape `[B, L, d_model]`
-- `aux`: scalar tensor (auxiliary loss) when `is_training=True`; otherwise `None`.
-
----
 ```python
 import torch
 import torch.nn as nn
-from typing import Optional, Any
+from typing import Optional, Any, Tuple
 from WsFFN import wsFFN, Config # Assuming wsFFN, Config are available
 
 # --- CONCEPTUAL CLASS: Transformer Block (Wraps wsFFN) ---
@@ -328,6 +318,26 @@ pip install torch
 ```
 
 Then import the module from this repository.
+
+---
+
+## Citation
+
+If you use WsFFN in your research, please cite:
+
+```bibtex
+@misc{wsffn2025,
+  title={WsFFN: World-Structured Feed-Forward Network for Language Models},
+  author={vmintf},
+  year={2025},
+  url={https://github.com/vmintf/WsFFN}
+}
+```
+
+**Key references:**
+- **Soft MoE**: Puigcerver, J., et al. (2023). "From Sparse to Soft Mixtures of Experts." arXiv:2308.00951.
+- **SwiGLU**: Shazeer, N. (2020). "GLU Variants Improve Transformer." arXiv:2002.05202.
+- **Contrastive Learning**: Oord, A., et al. (2018). "Representation Learning with Contrastive Predictive Coding." arXiv:1807.03748.
 
 ---
 
