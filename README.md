@@ -18,6 +18,11 @@ This repository provides a compact PyTorch implementation intended to be embedde
 
 ---
 
+# Acknowledgements
+The core idea and architectural design of WsFFN originated from my initial insight into forming and regularizing a point-wise latent space within the FFN. Through a subsequent brainstorming process, this idea was refined and materialized into its current form, which aims to achieve Soft MoE-like functionality using dense computation. The final PyTorch code implementation was executed with high fidelity and efficiency with the assistance of Claude Sonnet and Gemini.
+
+---
+
 ## Architecture
 
 Given input $\mathbf{X} \in \mathbb{R}^{B \times L \times d_{\text{model}}}$:
