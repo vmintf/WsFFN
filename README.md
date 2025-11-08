@@ -142,48 +142,136 @@ Y, aux = wsffn(X, is_training=True)
 ---
 ```python
 import torch
-from WsFFN import wsFFN, Config
+import torch.nn as nn
+from typing import Optional, Any
+from WsFFN import wsFFN, Config # Assuming wsFFN, Config are available
 
-# 1. Configuration and Model Initialization (Using Pretraining setup: use_aux_loss=True)
-cfg = Config(d_model=1024, d_ffn=4096, n_head=8, lambda_z=1e-5, lambda_c=5e-3, use_aux_loss=True)
-ffn = wsFFN(cfg)
+# --- CONCEPTUAL CLASS: Transformer Block (Wraps wsFFN) ---
+# A simplified layer that integrates wsFFN and passes through the training status.
+class TransformerLayer(nn.Module):
+    def __init__(self, config: Config):
+        super().__init__()
+        # Simplified: just the wsFFN part for demonstration
+        self.ffn = wsFFN(config)
+        self.attn = nn.Identity() 
 
-# Prepare input tensor: [Batch, Sequence Length, Model Dimension]
-x = torch.randn(2, 128, 1024) 
+    # Note: This forward method must match the call in the full model: h, _, aux_loss = layer(h, use_cache=False)
+    def forward(self, x: torch.Tensor, use_cache: bool = False) -> Tuple[torch.Tensor, Any, torch.Tensor or None]:
+        # Assume self.training is correctly set (via model.train() or passed down from full model)
+        output, aux_loss = self.ffn(x) 
+        # The full layer would also include Attention and Normalization, but we return a dummy cache slot
+        return output, None, aux_loss 
 
-# --- A. Pretraining (Auxiliary Loss Enabled) ---
+# --- CONCEPTUAL CLASS: Full Model (The one you designed) ---
+class Model(nn.Module):
+    def __init__(self, config: Config, num_layers: int = 4, vocab_size: int = 32000):
+        super().__init__()
+        self.config = config
+        self.token_embeddings = nn.Embedding(vocab_size, config.d_model)
+        # Create a stack of TransformerLayers, each containing a wsFFN
+        self.layers = nn.ModuleList([TransformerLayer(config) for _ in range(num_layers)])
+        self.norm_f = nn.LayerNorm(config.d_model)
+        self.lm_head = nn.Linear(config.d_model, vocab_size, bias=False)
 
-# 1. Set model to training mode (self.training = True)
-# aux_loss will be calculated when ffn.forward(x) is called in this mode.
-ffn.train() 
+    # Simplified mock method for main loss calculation
+    def compute_main_loss(self, logits, labels, objective_id):
+        # In a real model, this would be Cross-Entropy or similar
+        return torch.randn(1) * 10 # Mock loss
 
-y, aux_loss = ffn(x) 
+    def forward(self, input_ids: torch.Tensor, labels: Optional[torch.Tensor] = None,
+                objective_id: Optional[torch.Tensor] = None) -> Any:
+        
+        # Custom training check based on inputs being provided
+        is_training = labels is not None and objective_id is not None
 
-# Calculate the total loss by adding the auxiliary loss
-main_loss = torch.randn(1) # Hypothetical main loss
-total_loss = main_loss + aux_loss
-# print(f"Total Loss: {total_loss.item():.4f}") # For demonstration
+        # 1. Embeddings
+        h = self.token_embeddings(input_ids)
+        
+        total_wsffn_aux_loss = torch.tensor(0.0, device=h.device)
 
-# --- B. Finetuning/Inference (Auxiliary Loss Disabled) ---
+        # 2. Iterate and Accumulate wsFFN Loss
+        for layer in self.layers:
+            # kv_cache is ignored for training loop
+            # aux_loss contains L_Z + L_C from the wsFFN in that layer
+            h, _, aux_loss = layer(h, use_cache=False) 
+            
+            if is_training and aux_loss is not None:
+                total_wsffn_aux_loss += aux_loss
 
-# 1. Set model to evaluation mode (self.training = False)
-# aux_loss will be returned as None when ffn.forward(x) is called in this mode.
-ffn.eval()
+        # 3. Final Projection
+        h = self.norm_f(h)
+        logits = self.lm_head(h)
 
-# Use torch.no_grad() for inference to save memory and computation
+        if is_training:
+            # Calculate Main Loss (e.g., cross-entropy)
+            main_loss = self.compute_main_loss(logits, labels, objective_id)
+
+            # Calculate Logits Z-Loss (The third component)
+            logits_for_z = logits.detach()
+            logits_z_loss = self.config.lambda_logits_z * torch.logsumexp(logits_for_z, dim=-1).pow(2).mean()
+
+            # FINAL TOTAL LOSS = Main Loss + wsFFN Aux Loss (L_Z+L_C) + Logits Z-Loss
+            total_loss = main_loss + total_wsffn_aux_loss + logits_z_loss
+
+            # Prepare loss dictionary for logging/return
+            loss_dict = {
+                'total_loss': total_loss.item(),
+                'main_loss': main_loss.item(),
+                'wsffn_aux_loss': total_wsffn_aux_loss.item(),
+                'z_loss': logits_z_loss.item(), 
+            }
+            
+            # Simplified return, ignoring the NaN/Inf handling for clarity
+            return total_loss, logits, loss_dict
+
+        return logits
+
+
+# --- USAGE DEMONSTRATION ---
+
+# Configuration
+VOCAB_SIZE = 32000
+B, L = 2, 128
+cfg = Config(d_model=1024, d_ffn=4096, n_head=8, 
+             lambda_z=1e-5, lambda_c=5e-3, lambda_logits_z=1e-4, use_aux_loss=True)
+
+# Instantiate the full model
+full_model = Model(cfg)
+
+# 1. TRAINING MODE (All Losses Calculated)
+
+# Note: The model's loss calculation relies on the presence of labels/objective_id
+# We must ensure model.train() is called for the internal wsFFN layers
+full_model.train()
+
+# Prepare dummy inputs for training
+input_ids_train = torch.randint(0, VOCAB_SIZE, (B, L))
+labels_train = torch.randint(0, VOCAB_SIZE, (B, L)) # Required to signal training
+objective_id_train = torch.ones(B, L) # Required to signal training
+
+print("\n--- Training (Auxiliary Losses Enabled) ---")
+total_loss, logits, loss_dict = full_model(
+    input_ids=input_ids_train, 
+    labels=labels_train, 
+    objective_id=objective_id_train
+)
+
+print(f"Total Loss (L_Main + L_wsFFN + L_LogitsZ): {total_loss.item():.4f}")
+print(f"Loss Components: {loss_dict}")
+
+# 2. INFERENCE MODE (Only Logits Returned)
+
+# Note: While full_model.eval() is good practice, loss is avoided by omitting inputs
+full_model.eval()
+
+# Prepare dummy inputs for inference (omit labels/objective_id)
+input_ids_eval = torch.randint(0, VOCAB_SIZE, (B, L))
+
+print("\n--- Inference (Loss Calculation Skipped) ---")
 with torch.no_grad():
-    y_eval, aux_loss_eval = ffn(x)
-    
-# --- C. Config Toggling (Alternative way to disable loss) ---
+    logits_eval = full_model(input_ids=input_ids_eval)
 
-# Create a config specifically for finetuning (sets use_aux_loss=False)
-cfg_finetune = cfg.for_finetuning() 
-ffn_finetune = wsFFN(cfg_finetune)
-
-# Even if set to train(), aux_loss will be None because use_aux_loss is False
-ffn_finetune.train() 
-
-y_config, aux_config = ffn_finetune(x)
+print(f"Output: Logits tensor of shape {logits_eval.shape}")
 ```
 
 ---
