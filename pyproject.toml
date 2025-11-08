@@ -1,0 +1,10 @@
+[project]
+name = "wsffn"
+version = "0.0.1"
+description = "World Structured Feed Forward Network for Language Model"
+requires-python = ">=3.11"
+dependencies = [
+    "torch>=2.9.0",
+    "torchaudio>=2.9.0",
+    "torchvision>=0.24.0",
+]
