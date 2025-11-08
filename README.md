@@ -12,7 +12,7 @@ This repository provides a compact PyTorch implementation intended to be embedde
 ## Key Ideas
 
 - **SwiGLU FFN core**: WsFFN keeps the strong empirical performance of SwiGLU.
-- **Head-wise partition** of the FFN hidden dimension $d_{\text{ffn}}$ into $n_{\text{head}}$ groups ("heads"). Each head operates on $z_{\text{dim\_head}} = d_{\text{ffn}} / n_{\text{head}}$ channels.
+- **Head-wise partition** of the FFN hidden dimension $d_{\text{ffn}}$ into $n_{\text{head}}$ groups ("heads"). Each head operates on $$z_{\text{dim-head}} = d_{\text{ffn}} / n_{\text{head}}$$ channels.
 - **Grouped, block-diagonal z-projection** that is computed in a single dense matmul for efficiency, yet preserves per-head independence.
 - **Auxiliary training losses** on the z-head outputs that are fully batched and parallel, adding negligible overhead.
 
@@ -127,7 +127,7 @@ These losses are designed to be fully batched and parallelized, adding minimal p
 **Class**: `wsFFN`  
 **Config**: `d_model`, `d_ffn`, `n_head`, `λ_z`, `λ_c`, `λ_logits_z` (reserved), `use_aux_loss` toggles losses at call time.
 
-**Important**: $d_{\text{ffn}}$ must be divisible by $n_{\text{head}}$; $z_{\text{dim\_head}} = d_{\text{ffn}} / n_{\text{head}}$.
+**Important**: $d_{\text{ffn}}$ must be divisible by $n_{\text{head}}$; $$z_{\text{dimhead}} = d_{\text{ffn}} / n_{\text{head}}$$.
 
 ### Forward Signature
 
