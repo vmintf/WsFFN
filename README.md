@@ -220,6 +220,26 @@ Then import the module from this repository.
 
 ---
 
+## Citation
+
+If you use WsFFN in your research, please cite:
+
+```bibtex
+@misc{wsffn2025,
+  title={WsFFN: World-Structured Feed-Forward Network for Language Models},
+  author={vmintf},
+  year={2025},
+  url={https://github.com/[vmintf]/wsffn}
+}
+```
+
+**Key references:**
+- **Soft MoE**: Puigcerver, J., et al. (2023). "From Sparse to Soft Mixtures of Experts." arXiv:2308.00951.
+- **SwiGLU**: Shazeer, N. (2020). "GLU Variants Improve Transformer." arXiv:2002.05202.
+- **Contrastive Learning**: Oord, A., et al. (2018). "Representation Learning with Contrastive Predictive Coding." arXiv:1807.03748.
+
+---
+
 ## License
 
 MIT
