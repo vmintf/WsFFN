@@ -26,7 +26,7 @@ class Config:
 
 
 def z_regularization_loss(z_vector: torch.Tensor, lambda_z: float) -> torch.Tensor:
-    """L_Z: wsFFN 잠재 벡터의 L2 놈 규제 손실 (배치 연산 가능)"""
+    """L_Z: L2 norm regularization loss for wsFFN latent vectors (batch operation possible)"""
     # z_vector: [B*L*num_heads, z_dim_head]
     return lambda_z * torch.mean(torch.sum(z_vector ** 2, dim=-1))
 
@@ -42,30 +42,29 @@ def contrastive_loss_wsffn_batched(z_context_flat: torch.Tensor, lambda_c: float
     if N < 2:
         return torch.tensor(0.0, device=z_context_flat.device)
 
-    # 1. 유사도 행렬 계산: [N, N]
-    # N=B*H, B=batch_size, H=num_heads
-    # z_context_flat을 [B, H, D]로 재구성하여 배치 간 분리를 명확히 할 수도 있으나,
-    # 기존 논문 구현은 일반적으로 모든 N개의 벡터를 하나의 배치로 봅니다.
+    # L_C is calculated by comparing all wsFFN head vectors within the batch.
 
-    # 코사인 유사도: [N, D] -> [N, 1, D]와 [1, N, D]를 비교 -> [N, N]
+    # 1. Calculate Similarity Matrix: [N, N]
+    # N=B*H, B=batch_size, H=num_heads
+    # Cosine Similarity: [N, D] -> compare [N, 1, D] and [1, N, D] -> [N, N]
     similarity_matrix = F.cosine_similarity(
         z_context_flat.unsqueeze(1),
         z_context_flat.unsqueeze(0),
         dim=2
     )
 
-    # 2. Positive 쌍 설정 (자기 자신과의 유사도)
+    # 2. Set Positive Pair (Similarity with itself)
     positive_scores = similarity_matrix.diag() / temperature  # [N]
 
-    # 3. 로그 합산 지수 (LogSumExp)
-    # 분모: 모든 쌍과의 유사도
+    # 3. LogSumExp (Denominator)
+    # Denominator: Similarity with all pairs
     all_scores_logsumexp = torch.logsumexp(similarity_matrix / temperature, dim=1)  # [N]
 
-    # 4. InfoNCE Loss 계산
+    # 4. Calculate InfoNCE Loss
     # Loss = - log( exp(pos) / sum(exp(all)) ) = - (pos - logsumexp(all))
     loss = - (positive_scores - all_scores_logsumexp)  # [N]
 
-    # 모든 N개 요소의 평균 손실을 반환
+    # Return the average loss over all N elements
     return lambda_c * torch.mean(loss)
 
 
@@ -91,20 +90,21 @@ class wsFFN(nn.Module):
         self.w3 = nn.Linear(d_model, d_ffn, bias=False)
         self.silu = nn.SiLU()
 
-        # Z-Head용 투영 - 진짜 병렬 처리 가능하도록 변경
-        # 방법 1: Grouped Linear (추천)
-        # d_ffn 전체를 한 번에 처리하되, 각 헤드는 독립적으로
+        # Z-Head Projection (W_z) - Initialized as Block Diagonal Matrix
         self.z_projection = nn.Linear(d_ffn, d_ffn, bias=False)
 
-        # 초기화: 블록 대각 행렬로 (각 헤드가 독립적)
+        # Store config value for forward pass logic
+        self.use_aux_loss = config.use_aux_loss
+
+        # Initialization: Block Diagonal Matrix (each head is independent)
         with torch.no_grad():
-            # 전체를 0으로
+            # Zero out the entire weight matrix
             self.z_projection.weight.zero_()
-            # 각 헤드의 블록만 초기화
+            # Initialize only the blocks for each head using Kaiming
             for i in range(num_heads):
                 start_idx = i * self.z_dim_head
                 end_idx = (i + 1) * self.z_dim_head
-                # Kaiming 초기화
+                # Kaiming Initialization
                 nn.init.kaiming_uniform_(
                     self.z_projection.weight[start_idx:end_idx, start_idx:end_idx],
                     a=math.sqrt(5)
@@ -119,46 +119,53 @@ class wsFFN(nn.Module):
         # [B, L, num_heads, z_dim_head] -> [B, L, D_FFN]
         return x.contiguous().view(x.size(0), x.size(1), self.d_ffn)
 
-    def forward(self, x: torch.Tensor, is_training: bool = True) -> Tuple[torch.Tensor, torch.Tensor or None]:
+    def forward(self, x: torch.Tensor) -> Tuple[
+        torch.Tensor, torch.Tensor or None]:
         B, L, D_MODEL = x.shape
 
-        # 1. SwiGLU 내부 확장
+        # 1. SwiGLU internal expansion
         h_1_flat = self.w1(x)  # [B, L, d_ffn]
         h_2_flat = self.w3(x)  # [B, L, d_ffn]
 
-        # 2. MHA 스타일 변환
+        # 2. MHA style transformation
         h_1_heads = self._split_into_heads(h_1_flat)  # [B, L, num_heads, z_dim_head]
         h_2_heads = self._split_into_heads(h_2_flat)  # [B, L, num_heads, z_dim_head]
 
-        # 3. SwiGLU 연산
+        # 3. SwiGLU operation
+        # (W_1(x) ⊙ SiLU(W_3(x)))
         gate_output_heads = self.silu(h_2_heads) * h_1_heads
 
-        # 4. 헤드 재통합 및 최종 투영
+        # 4. Merge heads and final projection
         gate_output_flat = self._merge_heads(gate_output_heads)
         output = self.w2(gate_output_flat)  # [B, L, d_model]
 
-        # 5. 훈련 시 보조 손실 계산 (진짜 병렬화)
-        aux_loss = torch.tensor(0.0, device=x.device)
-        if is_training:
+        # 5. Calculate auxiliary loss during training
+        aux_loss = None  # Initialize to None to return None if loss is not calculated
+
+        # Loss is calculated only if self.training is True AND use_aux_loss is True
+        if self.training and self.use_aux_loss:
             z_heads_base = h_1_heads  # [B, L, num_heads, z_dim_head]
 
-            # --- Z-Head 투영: 진짜 병렬 처리 ---
+            # --- Z-Head Projection: True Parallel Processing (W_z) ---
             z_heads_base_flat = self._merge_heads(z_heads_base)  # [B, L, d_ffn]
-            z_heads_projected_flat = self.z_projection(z_heads_base_flat)  # [B, L, d_ffn] - 한 번에 처리!
+            # Project Z vector using the Block Diagonal Matrix W_z
+            z_heads_projected_flat = self.z_projection(z_heads_base_flat)  # [B, L, d_ffn]
             z_heads_projected = self._split_into_heads(z_heads_projected_flat)  # [B, L, num_heads, z_dim_head]
 
-            # --- L_Z (Z-정규화 손실) 병렬 계산 ---
+            # --- Calculate L_Z (Z-Regularization Loss) ---
             z_flat_all = z_heads_projected.view(-1, self.z_dim_head)  # [B*L*num_heads, z_dim_head]
             l_z_total = z_regularization_loss(z_flat_all, self.lambda_z)
-            aux_loss += l_z_total
 
-            # --- L_C (Contrastive Loss) 병렬 계산 ---
+            # --- Calculate L_C (Contrastive Loss) ---
+            # Average over sequence length L to create context vector z_context
             z_context_all = torch.mean(z_heads_projected, dim=1)  # [B, num_heads, z_dim_head]
             z_context_flat = z_context_all.view(-1, self.z_dim_head)  # [B*num_heads, z_dim_head]
 
             l_c_total = contrastive_loss_wsffn_batched(
                 z_context_flat, self.lambda_c, self.num_heads, B
             )
-            aux_loss += l_c_total
 
-        return output, aux_loss if is_training else None
+            # Sum the total auxiliary loss
+            aux_loss = l_z_total + l_c_total
+
+        return output, aux_loss

@@ -1,10 +1,89 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "wsffn"
 version = "0.0.1"
-description = "World Structured Feed Forward Network for Language Model"
-requires-python = ">=3.11"
-dependencies = [
-    "torch>=2.9.0",
-    "torchaudio>=2.9.0",
-    "torchvision>=0.24.0",
+description = "World-Structured Feed-Forward Network: A novel FFN architecture with multi-head latent representations for language models"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "민성 Skystarry", email = "minsung@skystarry.xyz"}
 ]
+maintainers = [
+    {name = "민성 Skystarry", email = "minsung@skystarry.xyz"}
+]
+keywords = [
+    "pytorch",
+    "deep-learning",
+    "transformer",
+    "language-model",
+    "neural-network",
+    "ffn",
+    "attention",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+dependencies = [
+    "torch>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "isort>=5.12.0",
+    "flake8>=6.0.0",
+    "mypy>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/vmintf/WsFfn"
+Documentation = "https://github.com/vmintf/WsFFN#readme"
+Repository = "https://github.com/vmintf/WsFFN"
+Issues = "https://github.com/vmintf/WsFFN/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--cov=src --cov-report=term-missing"
