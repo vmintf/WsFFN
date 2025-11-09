@@ -2,7 +2,7 @@
 
 WsFFN is a drop-in replacement for the standard SwiGLU feed-forward network (FFN) used in modern Transformer language models. It introduces two ideas:
 
-- **Parallelized z-head projection** that yields Soft-MoE-like specialization while keeping the compute profile of a dense FFN.
+- **Parallelized z-head projection** that yields Balanced Multi-head while keeping the compute profile of a dense FFN.
 - **An auxiliary latent space** with regularization and contrastive structure to encourage world-model-like representations.
 
 This repository provides a compact PyTorch implementation intended to be embedded inside Transformer blocks.
