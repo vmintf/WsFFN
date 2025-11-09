@@ -1,4 +1,4 @@
-# WsFFN: World-synergistic Feed-Forward Network for LMs
+# WsFFN: World-Structured Feed-Forward Network for LMs
 
 WsFFN is a drop-in replacement for the standard SwiGLU feed-forward network (FFN) used in modern Transformer language models. It introduces two ideas:
 
