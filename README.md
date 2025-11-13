@@ -284,8 +284,8 @@ The module is purely feed-forward; there is no change to attention modules.
 
 ## Training Recipe
 
-- **Pretraining**: Enable auxiliary losses (`is_training=True`) and include `aux` in the total loss with weights $\lambda_z$, $\lambda_c$.
-- **Finetuning**: Optionally disable auxiliary losses (`is_training=False`) to reduce overhead.
+- **Pretraining**: Enable auxiliary losses (`model.train()`) and include `aux` in the total loss with weights $\lambda_z$, $\lambda_c$.
+- **Finetuning**: Optionally disable auxiliary losses (`model.eval()`) to reduce overhead.
 - **Typical hyperparameters**: $\lambda_z \approx 10^{-5}$, $\lambda_c \approx 5 \times 10^{-3}$, $\tau = 0.07$.
 - $d_{\text{ffn}}$ divisible by $n_{\text{head}}$; common setting: $d_{\text{ffn}} = 4 \times d_{\text{model}}$, $n_{\text{head}} \in \{4, 8, 16\}$.
 
