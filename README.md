@@ -1,3 +1,13 @@
+[![PyPI version](https://badge.fury.io/py/WsFFN.svg)](https://pypi.org/project/WsFFN/)
+[![Python](https://img.shields.io/pypi/pyversions/WsFFN)](https://pypi.org/project/WsFFN/)
+[![Downloads](https://static.pepy.tech/badge/wsffn)](https://pepy.tech/project/wsffn)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+> Note  
+> Now this project has been released on PyPI. You can install it with `pip install wsffn`.  
+> Warning: This is a alpha version. Please report any issues you encounter.  
+> Feedback and contributions welcome!  
+
 # WsFFN: World-Structured Feed-Forward Network for LMs
 
 WsFFN is a drop-in replacement for the standard SwiGLU feed-forward network (FFN) used in modern Transformer language models. It introduces two ideas:
