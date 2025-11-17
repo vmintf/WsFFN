@@ -3,8 +3,8 @@
 [![Downloads](https://static.pepy.tech/badge/wsffn)](https://pepy.tech/project/wsffn)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> Note  
-> Now this project has been released on PyPI. You can install it with `pip install wsffn`.  
+> Note:  
+> Now this project has been released on PyPI. You can install it with `pip install wsffn --pre`.  
 > Warning: This is a alpha version. Please report any issues you encounter.  
 > Feedback and contributions welcome!  
 
