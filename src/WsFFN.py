@@ -1,11 +1,11 @@
 # src/WsFFN.py
+import math
+from dataclasses import dataclass, replace
+from typing import Optional, Tuple
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from dataclasses import dataclass, replace
-
-import math
-from typing import Tuple, Optional
 
 
 @dataclass(frozen=True)
@@ -22,6 +22,7 @@ class Config:
         temperature: Temperature for contrastive loss scaling
         use_aux_loss: Whether to compute auxiliary losses during training
     """
+
     d_model: int
     d_ffn: int
     n_head: int
@@ -53,9 +54,9 @@ def z_regularization_loss(z_vector: torch.Tensor, lambda_z: float) -> torch.Tens
     return lambda_z * torch.mean(z_vector.pow(2))
 
 
-def contrastive_loss_wsffn_batched(z_context_flat: torch.Tensor, lambda_c: float,
-                                   num_heads: int,
-                                   temperature: float) -> torch.Tensor:
+def contrastive_loss_wsffn_batched(
+    z_context_flat: torch.Tensor, lambda_c: float, num_heads: int, temperature: float
+) -> torch.Tensor:
     """Compute InfoNCE contrastive loss for wsFFN latent vectors.
 
     The loss encourages diversity across heads by treating each batch×head element
@@ -81,9 +82,7 @@ def contrastive_loss_wsffn_batched(z_context_flat: torch.Tensor, lambda_c: float
     # Calculate pairwise cosine similarity matrix: [N, N]
     # where N = batch_size * num_heads
     similarity_matrix = F.cosine_similarity(
-        z_context_flat.unsqueeze(1),
-        z_context_flat.unsqueeze(0),
-        dim=2
+        z_context_flat.unsqueeze(1), z_context_flat.unsqueeze(0), dim=2
     )
 
     # Positive scores: self-similarity (diagonal elements)
@@ -93,7 +92,7 @@ def contrastive_loss_wsffn_batched(z_context_flat: torch.Tensor, lambda_c: float
     all_scores_logsumexp = torch.logsumexp(similarity_matrix / temperature, dim=1)  # [N]
 
     # InfoNCE loss: -log(exp(pos) / sum(exp(all))) = -(pos - logsumexp(all))
-    loss = - (positive_scores - all_scores_logsumexp)  # [N]
+    loss = -(positive_scores - all_scores_logsumexp)  # [N]
 
     return lambda_c * torch.mean(loss)
 
@@ -118,6 +117,7 @@ class wsFFN(nn.Module):
         w1, w2, w3: SwiGLU projection layers
         z_projection: Block-diagonal projection for z-heads
     """
+
     def __init__(self, config: Config):
         super().__init__()
         d_model = config.d_model
@@ -156,8 +156,7 @@ class wsFFN(nn.Module):
                 end_idx = (i + 1) * self.z_dim_head
                 # Kaiming Initialization
                 nn.init.kaiming_uniform_(
-                    self.z_projection.weight[start_idx:end_idx, start_idx:end_idx],
-                    a=math.sqrt(5)
+                    self.z_projection.weight[start_idx:end_idx, start_idx:end_idx], a=math.sqrt(5)
                 )
 
     def _split_into_heads(self, x: torch.Tensor) -> torch.Tensor:
@@ -223,7 +222,9 @@ class wsFFN(nn.Module):
             z_heads_base_flat = self._merge_heads(z_heads_base)  # [B, L, d_ffn]
             # Project Z vector using the Block Diagonal Matrix W_z
             z_heads_projected_flat = self.z_projection(z_heads_base_flat)  # [B, L, d_ffn]
-            z_heads_projected = self._split_into_heads(z_heads_projected_flat)  # [B, L, num_heads, z_dim_head]
+            z_heads_projected = self._split_into_heads(
+                z_heads_projected_flat
+            )  # [B, L, num_heads, z_dim_head]
 
             # Calculate L_Z (Z-Regularization Loss)
             z_flat_all = z_heads_projected.view(-1, self.z_dim_head)  # [B*L*num_heads, z_dim_head]

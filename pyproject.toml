@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "WsFFN"
-version = "0.0.1a1"
+version = "0.0.1a2"
 description = "World-Structured Feed-Forward Network: A novel FFN architecture with multi-head latent representations for language models"
 readme = "README.md"
 requires-python = ">=3.8"
