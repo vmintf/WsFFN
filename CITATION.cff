@@ -1,8 +1,9 @@
 cff-version: 1.1.0
 message: "If you use this software, please cite it as below."
 authors:
-- family-names: 민성
-  given-names: Skystarry
-title:vmintf/WsFFN: WsFFN Pre Alpha v0.0.1a2 Release (Experimental)
+- family-names: "vmintf" # 닉네임을 성으로 사용 (인용 시 First Name이 없는 저자로 처리됨)
+  given-names: "" 
+  # orcid: # ORCID가 없으므로 이 줄은 삭제
+title: vmintf/WsFFN: WsFFN Pre Alpha v0.0.1a2 Release (Experimental) # <--- 여기에 띄어쓰기 추가
 version: v0.0.1-alpha.2
 date-released: 2025-11-17
