@@ -6,7 +6,7 @@ except (ImportError, ModuleNotFoundError):
     )
 
 __name__ = "WsFFN"
-__version__ = "0.0.1a2"
+__version__ = "0.0.2a0-e"
 __author__ = "민성 Skystarry"
 
 from .WsFFN import Config, wsFFN

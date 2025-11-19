@@ -10,26 +10,23 @@ from torch.nn import functional as F
 
 @dataclass(frozen=True)
 class Config:
-    """Configuration for WsFFN module.
+    """
+    Configuration for WsFFN module.
 
     Args:
         d_model: Model dimension
         d_ffn: FFN hidden dimension (must be divisible by n_head)
         n_head: Number of heads for latent space partitioning
         lambda_z: Weight for L2 regularization loss on z vectors
-        lambda_c: Weight for contrastive loss
-        lambda_logits_z: Weight for logits z-loss (reserved for future use)
-        temperature: Temperature for contrastive loss scaling
+        lambda_d: Weight for orthogonality (diversity) loss
         use_aux_loss: Whether to compute auxiliary losses during training
     """
 
     d_model: int
     d_ffn: int
     n_head: int
-    lambda_z: float = 1e-5
-    lambda_c: float = 0.005
-    lambda_logits_z: float = 1e-4
-    temperature: float = 0.07
+    lambda_z: float = 1e-4
+    lambda_d: float = 0.1
     use_aux_loss: bool = True
 
     def for_finetuning(self):
@@ -45,7 +42,7 @@ def z_regularization_loss(z_vector: torch.Tensor, lambda_z: float) -> torch.Tens
     """Compute L2 regularization loss for wsFFN latent vectors.
 
     Args:
-        z_vector: Latent vectors of shape [B*L*num_heads, z_dim_head]
+        z_vector: Latent vectors of shape [..., z_dim_head]
         lambda_z: Regularization weight
 
     Returns:
@@ -54,55 +51,48 @@ def z_regularization_loss(z_vector: torch.Tensor, lambda_z: float) -> torch.Tens
     return lambda_z * torch.mean(z_vector.pow(2))
 
 
-def contrastive_loss_wsffn_batched(
-    z_context_flat: torch.Tensor, lambda_c: float, num_heads: int, temperature: float
-) -> torch.Tensor:
-    """Compute InfoNCE contrastive loss for wsFFN latent vectors.
+def orthogonality_diversity_loss(z_heads: torch.Tensor, lambda_d: float) -> torch.Tensor:
+    """Compute Orthogonality Loss to encourage head specialization.
 
-    The loss encourages diversity across heads by treating each batch×head element
-    as a separate sample and maximizing self-similarity relative to other samples.
+    This loss minimizes the cosine similarity between different latent heads
+    within the same sample, encouraging them to capture distinct features.
+    The target is for the Gram matrix of heads to resemble an Identity matrix.
 
     Args:
-        z_context_flat: Context vectors of shape [B * num_heads, z_dim_head]
-        lambda_c: Contrastive loss weight
-        num_heads: Number of heads (kept for API compatibility)
-        temperature: Temperature scaling factor for similarity scores
+        z_heads: Context vectors of shape [Batch, num_heads, head_dim]
+                 (usually averaged over the sequence length)
+        lambda_d: Diversity loss weight
 
     Returns:
         Scalar loss tensor
-
-    Note:
-        Uses self-similarity as positive pairs. Negatives are from other heads
-        in the batch, which is an intentional design choice for cross-head diversity.
     """
-    N = z_context_flat.size(0)  # N = B * num_heads
-    if N < 2:
-        return torch.tensor(0.0, device=z_context_flat.device)
+    # 1. Normalize vectors along the last dimension for cosine similarity
+    # Shape: [B, H, D]
+    z_norm = F.normalize(z_heads, p=2, dim=-1)
 
-    # Calculate pairwise cosine similarity matrix: [N, N]
-    # where N = batch_size * num_heads
-    similarity_matrix = F.cosine_similarity(
-        z_context_flat.unsqueeze(1), z_context_flat.unsqueeze(0), dim=2
-    )
+    # 2. Compute pairwise cosine similarity matrix (Gram Matrix)
+    # [B, H, D] @ [B, D, H] -> [B, H, H]
+    # (i, j) element represents the similarity between head i and head j
+    gram_matrix = torch.bmm(z_norm, z_norm.transpose(1, 2))
 
-    # Positive scores: self-similarity (diagonal elements)
-    positive_scores = similarity_matrix.diag() / temperature  # [N]
+    # 3. Create Target Identity Matrix
+    # We want diagonal elements to be 1 (self-similarity) and off-diagonals to be 0 (orthogonality)
+    num_heads = z_heads.size(1)
+    identity = torch.eye(num_heads, device=z_heads.device).unsqueeze(0)  # [1, H, H]
 
-    # Denominator: logsumexp of all pairwise similarities
-    all_scores_logsumexp = torch.logsumexp(similarity_matrix / temperature, dim=1)  # [N]
+    # 4. Compute Mean Squared Error against Identity Matrix
+    # This penalizes non-zero off-diagonal elements
+    loss = torch.mean((gram_matrix - identity) ** 2)
 
-    # InfoNCE loss: -log(exp(pos) / sum(exp(all))) = -(pos - logsumexp(all))
-    loss = -(positive_scores - all_scores_logsumexp)  # [N]
-
-    return lambda_c * torch.mean(loss)
+    return lambda_d * loss
 
 
 class wsFFN(nn.Module):
     """World-Structured Feed-Forward Network with multi-head latent space.
 
     A drop-in replacement for standard SwiGLU FFN that introduces:
-    - Parallelized z-head projection for balanced multi-head structure
-    - Auxiliary latent space with regularization and contrastive losses
+    - Optimized Grouped Conv1d for block-diagonal latent projection
+    - Orthogonality loss to enforce feature disentanglement across heads
 
     Args:
         config: Configuration object containing all hyperparameters
@@ -111,76 +101,41 @@ class wsFFN(nn.Module):
         ValueError: If d_ffn is not divisible by n_head
 
     Attributes:
-        d_ffn: FFN hidden dimension
-        num_heads: Number of heads for latent space partitioning
-        z_dim_head: Dimension per head (d_ffn // num_heads)
-        w1, w2, w3: SwiGLU projection layers
-        z_projection: Block-diagonal projection for z-heads
+        z_projection: Grouped Conv1d layer acting as block-diagonal linear projections
     """
 
     def __init__(self, config: Config):
         super().__init__()
-        d_model = config.d_model
-        d_ffn = config.d_ffn
-        num_heads = config.n_head
+        self.config = config
 
-        if d_ffn % num_heads != 0:
-            raise ValueError("d_ffn must be divisible by num_heads")
+        if config.d_ffn % config.n_head != 0:
+            raise ValueError("d_ffn must be divisible by n_head")
 
-        self.d_ffn = d_ffn
-        self.num_heads = num_heads
-        self.z_dim_head = d_ffn // num_heads
-        self.lambda_z = config.lambda_z
-        self.lambda_c = config.lambda_c
-        self.temperature = config.temperature
+        self.d_ffn = config.d_ffn
+        self.n_head = config.n_head
+        self.z_dim_head = config.d_ffn // config.n_head
 
         # SwiGLU Layers (w1, w2, w3)
-        self.w1 = nn.Linear(d_model, d_ffn, bias=False)
-        self.w2 = nn.Linear(d_ffn, d_model, bias=False)
-        self.w3 = nn.Linear(d_model, d_ffn, bias=False)
+        self.w1 = nn.Linear(config.d_model, config.d_ffn, bias=False)
+        self.w2 = nn.Linear(config.d_ffn, config.d_model, bias=False)
+        self.w3 = nn.Linear(config.d_model, config.d_ffn, bias=False)
         self.silu = nn.SiLU()
 
-        # Z-Head Projection (W_z) - Initialized as Block Diagonal Matrix
-        self.z_projection = nn.Linear(d_ffn, d_ffn, bias=False)
+        # Optimized Z-Head Projection (W_z)
+        # Using Conv1d with groups=n_head is mathematically equivalent to a
+        # block-diagonal linear layer but significantly more efficient.
+        # kernel_size=1 ensures it acts as a point-wise projection (like Linear).
+        self.z_projection = nn.Conv1d(
+            in_channels=config.d_ffn,
+            out_channels=config.d_ffn,
+            kernel_size=1,
+            groups=config.n_head,  # Key: Independent computation per head
+            bias=False,
+        )
 
-        # Store config value for forward pass logic
-        self.use_aux_loss = config.use_aux_loss
-
-        # Initialization: Block Diagonal Matrix (each head is independent)
-        with torch.no_grad():
-            # Zero out the entire weight matrix
-            self.z_projection.weight.zero_()
-            # Initialize only the blocks for each head using Kaiming
-            for i in range(num_heads):
-                start_idx = i * self.z_dim_head
-                end_idx = (i + 1) * self.z_dim_head
-                # Kaiming Initialization
-                nn.init.kaiming_uniform_(
-                    self.z_projection.weight[start_idx:end_idx, start_idx:end_idx], a=math.sqrt(5)
-                )
-
-    def _split_into_heads(self, x: torch.Tensor) -> torch.Tensor:
-        """Reshape flat FFN dimension into separate heads.
-
-        Args:
-            x: Tensor of shape [B, L, d_ffn]
-
-        Returns:
-            Tensor of shape [B, L, num_heads, z_dim_head]
-        """
-        new_shape = x.size()[:-1] + (self.num_heads, self.z_dim_head)
-        return x.view(new_shape)
-
-    def _merge_heads(self, x: torch.Tensor) -> torch.Tensor:
-        """Merge separate heads back into flat FFN dimension.
-
-        Args:
-            x: Tensor of shape [B, L, num_heads, z_dim_head]
-
-        Returns:
-            Tensor of shape [B, L, d_ffn]
-        """
-        return x.contiguous().view(x.size(0), x.size(1), self.d_ffn)
+        # Initialize z_projection
+        # Since structure is handled by 'groups', we can simply use Kaiming init
+        nn.init.kaiming_uniform_(self.z_projection.weight, a=math.sqrt(5))
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """Forward pass through wsFFN.
@@ -191,55 +146,47 @@ class wsFFN(nn.Module):
         Returns:
             Tuple of:
                 - output: Transformed tensor of shape [B, L, d_model]
-                - aux_loss: Auxiliary loss (L_Z + L_C) if training, else None
+                - aux_loss: Scalar auxiliary loss (L_Z + L_D) if training, else None
         """
-        B, L, D_MODEL = x.shape
+        # 1. Standard SwiGLU Operation
+        h1 = self.w1(x)  # [B, L, d_ffn]
+        h3 = self.w3(x)  # [B, L, d_ffn]
 
-        # 1. SwiGLU internal expansion
-        h_1_flat = self.w1(x)  # [B, L, d_ffn]
-        h_2_flat = self.w3(x)  # [B, L, d_ffn]
+        # Gate logic: (SiLU(W_3(x)) * W_1(x))
+        gate_output = self.silu(h3) * h1
+        output = self.w2(gate_output)  # [B, L, d_model]
 
-        # 2. MHA style transformation
-        h_1_heads = self._split_into_heads(h_1_flat)  # [B, L, num_heads, z_dim_head]
-        h_2_heads = self._split_into_heads(h_2_flat)  # [B, L, num_heads, z_dim_head]
-
-        # 3. SwiGLU operation
-        # (W_1(x) ⊙ SiLU(W_3(x)))
-        gate_output_heads = self.silu(h_2_heads) * h_1_heads
-
-        # 4. Merge heads and final projection
-        gate_output_flat = self._merge_heads(gate_output_heads)
-        output = self.w2(gate_output_flat)  # [B, L, d_model]
-
-        # 5. Calculate auxiliary loss during training
+        # 2. Calculate Auxiliary Loss (Training Only)
         aux_loss = None
 
-        # Loss is calculated only if self.training is True AND use_aux_loss is True
-        if self.training and self.use_aux_loss:
-            z_heads_base = h_1_heads  # [B, L, num_heads, z_dim_head]
+        if self.training and self.config.use_aux_loss:
+            # Prepare input for Conv1d: [B, L, D] -> [B, D, L]
+            # Conv1d expects channels (D) as the second dimension.
+            z_input = h1.transpose(1, 2)
 
-            # Z-Head Projection: True Parallel Processing (W_z)
-            z_heads_base_flat = self._merge_heads(z_heads_base)  # [B, L, d_ffn]
-            # Project Z vector using the Block Diagonal Matrix W_z
-            z_heads_projected_flat = self.z_projection(z_heads_base_flat)  # [B, L, d_ffn]
-            z_heads_projected = self._split_into_heads(
-                z_heads_projected_flat
-            )  # [B, L, num_heads, z_dim_head]
+            # Project Z vector using optimized Grouped Conv1d
+            # Output shape: [B, D, L]
+            z_projected = self.z_projection(z_input)
 
-            # Calculate L_Z (Z-Regularization Loss)
-            z_flat_all = z_heads_projected.view(-1, self.z_dim_head)  # [B*L*num_heads, z_dim_head]
-            l_z_total = z_regularization_loss(z_flat_all, self.lambda_z)
-
-            # Calculate L_C (Contrastive Loss)
-            # Average over sequence length L to create context vector z_context
-            z_context_all = torch.mean(z_heads_projected, dim=1)  # [B, num_heads, z_dim_head]
-            z_context_flat = z_context_all.view(-1, self.z_dim_head)  # [B*num_heads, z_dim_head]
-
-            l_c_total = contrastive_loss_wsffn_batched(
-                z_context_flat, self.lambda_c, self.num_heads, self.temperature
+            # Reshape for loss calculation:
+            # 1. Transpose back: [B, D, L] -> [B, L, D]
+            # 2. View as heads: [B, L, n_head, z_dim_head]
+            z_heads = z_projected.transpose(1, 2).view(
+                x.size(0), x.size(1), self.n_head, self.z_dim_head
             )
 
-            # Sum the total auxiliary loss
-            aux_loss = l_z_total + l_c_total
+            # Calculate L_Z (Regularization Loss)
+            # Flatten all dimensions except feature dim
+            l_z = z_regularization_loss(z_heads, self.config.lambda_z)
+
+            # Calculate L_D (Orthogonality/Diversity Loss)
+            # Average over sequence length L to create a context vector per head
+            # [B, L, H, D_h] -> [B, H, D_h]
+            z_context = z_heads.mean(dim=1)
+
+            l_d = orthogonality_diversity_loss(z_context, self.config.lambda_d)
+
+            # Sum total auxiliary loss
+            aux_loss = l_z + l_d
 
         return output, aux_loss
