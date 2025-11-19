@@ -335,13 +335,8 @@ Then import the module from this repository.
 
 If you use WsFFN in your research, please cite:
 
-```bibtex
-@misc{wsffn2025,
-  title={WsFFN: World-Structured Feed-Forward Network for Language Models},
-  author={vmintf},
-  year={2025},
-  url={https://github.com/vmintf/WsFFN}
-}
+```apa
+vmintf. (2025). vmintf/WsFFN: World-Structured Feed-Forward Network for Efficient Language Models (Version v0.0.1-alpha.2) [Computer software]. https://doi.org/10.5281/zenodo.17640630
 ```
 
 **Key references:**
